@@ -2,23 +2,26 @@ import os
 import time
 import requests
 import threading
-from datetime import datetime, timedelta # <-- Nueva importación
 from flask import Flask
 
+# Inicializar la aplicación Flask
 app = Flask(__name__)
 
 # --- CONFIGURACIÓN DEL BOT ---
 TOKEN = "8107696402:AAEwS9w1AcFYY8jY-vrENEtcvkEcAjuq-QI"
-CHAT_ID = -1003994301891 
+CHAT_ID = -1003994301891  # Tu ID confirmado
 
+# Coordenadas geográficas de México
 MEXICO_BOUNDS = {
-    "lat_min": 14.5, "lat_max": 32.7, 
-    "lon_min": -118.4, "lon_max": -86.7
+    "lat_min": 14.5, 
+    "lat_max": 32.7, 
+    "lon_min": -118.4, 
+    "lon_max": -86.7
 }
 
 def monitorear_sismos():
     vistos = set()
-    print("Iniciando monitoreo con hora local...")
+    print("Iniciando monitoreo de prueba (Mag >= 1.0)...")
     
     while True:
         try:
@@ -34,24 +37,15 @@ def monitorear_sismos():
                     MEXICO_BOUNDS["lon_min"] <= lon <= MEXICO_BOUNDS["lon_max"]):
                     
                     if s_id not in vistos:
-                        props = sismo['properties']
-                        mag = props['mag']
-                        lugar = props['place']
+                        mag = sismo['properties']['mag']
+                        lugar = sismo['properties']['place']
                         
-                        # --- CONVERSIÓN DE HORA ---
-                        # Convertimos milisegundos a objeto datetime (UTC)
-                        fecha_utc = datetime.fromtimestamp(props['time'] / 1000.0)
-                        # Ajustamos a la hora de México (UTC -6 horas)
-                        # Nota: Si es horario de verano, cámbialo a -5
-                        fecha_mex = fecha_utc - timedelta(hours=6)
-                        hora_formateada = fecha_mex.strftime('%d/%m/%Y %H:%M:%S')
-
-                        if mag >= 1.0: # Mantengo 1.0 para tu prueba, cámbialo a 4.0 después
-                            mensaje = (f"⚠️ **SISMO DETECTADO (USGS)**\n\n"
+                        # CAMBIO DE PRUEBA: Bajamos a 1.0 para ver mensajes rápido
+                        if mag >= 1.0:
+                            mensaje = (f"⚠️ **SISMO DETECTADO (PRUEBA)**\n\n"
                                        f"📈 **Magnitud:** {mag}\n"
-                                       f"🕒 **Hora México:** {hora_formateada}\n"
                                        f"📍 **Lugar:** {lugar}\n"
-                                       f"🌐 [Más detalles aquí]({props['url']})")
+                                       f"🌐 [Más detalles]({sismo['properties']['url']})")
                             
                             requests.post(
                                 f"https://api.telegram.org/bot{TOKEN}/sendMessage",
@@ -67,7 +61,7 @@ def monitorear_sismos():
 
 @app.route('/')
 def home():
-    return "🌐 Bot con registro de hora activo..."
+    return "🌐 Bot en MODO PRUEBA (Mag 1.0) activo..."
 
 if __name__ == "__main__":
     t = threading.Thread(target=monitorear_sismos, daemon=True)
