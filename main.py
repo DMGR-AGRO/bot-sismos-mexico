@@ -50,7 +50,7 @@ def monitorear_sismos():
                         mag = props['mag']
                         
                         # Solo procesar si tiene magnitud (a veces la USGS sube eventos sin mag inicial)
-                        if mag is not None and mag >= 1.0: 
+                        if mag is not None and mag >= 4.0: 
                             # Hora local México (UTC -6)
                             fecha_mex = datetime.fromtimestamp(props['time'] / 1000.0) - timedelta(hours=6)
                             hora_txt = fecha_mex.strftime('%d/%m/%Y %H:%M:%S')
