@@ -12,10 +12,12 @@ app = Flask(__name__)
 TOKEN = "8107696402:AAEwS9w1AcFYY8jY-vrENEtcvkEcAjuq-QI"
 CHAT_ID = -1003994301891 
 
-# Bounding Box de México
-MEXICO_BOUNDS = {
-    "lat_min": 14.5, "lat_max": 32.7, 
-    "lon_min": -118.4, "lon_max": -86.7
+# Bounding Box Regional (México + Guatemala)
+REGION_BOUNDS = {
+    "lat_min": 13.0,  # Bajado para cubrir todo Guatemala
+    "lat_max": 33.0,  # Ajuste ligero al norte
+    "lon_min": -118.5, 
+    "lon_max": -87.0  # Expandido al este para cubrir la frontera de Guatemala
 }
 
 def enviar_telegram(mensaje):
@@ -28,12 +30,12 @@ def enviar_telegram(mensaje):
 
 # --- 1. MONITOREO DE SISMOS (USGS) ---
 def monitorear_sismos():
-    # Usamos un set para rastrear qué IDs ya fueron notificados
     notificados = set()
-    print("Iniciando monitoreo de sismos (USGS)...")
+    print("Iniciando monitoreo sísmico regional (MX-GT)...")
     
     while True:
         try:
+            # Usamos el feed de todas las magnitudes del día
             url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson"
             response = requests.get(url, timeout=10)
             data = response.json()
@@ -41,41 +43,39 @@ def monitorear_sismos():
             for sismo in data['features']:
                 s_id = sismo['id']
                 
-                # Si ya enviamos alerta de este sismo, lo ignoramos
+                # Si ya fue alertado, saltar
                 if s_id in notificados:
                     continue
 
                 coords = sismo['geometry']['coordinates']
                 lon, lat = coords[0], coords[1]
                 
-                # 1. Filtro Geográfico
-                if (MEXICO_BOUNDS["lat_min"] <= lat <= MEXICO_BOUNDS["lat_max"] and 
-                    MEXICO_BOUNDS["lon_min"] <= lon <= MEXICO_BOUNDS["lon_max"]):
+                # 1. Filtro Geográfico Regional
+                if (REGION_BOUNDS["lat_min"] <= lat <= REGION_BOUNDS["lat_max"] and 
+                    REGION_BOUNDS["lon_min"] <= lon <= REGION_BOUNDS["lon_max"]):
                     
                     props = sismo['properties']
                     mag = props.get('mag')
                     
-                    # 2. Filtro de Magnitud: Solo procesar si mag >= 2.0 (ajustable)
-                    # No guardamos en 'notificados' si la magnitud es menor, 
-                    # por si la USGS la actualiza a una mayor después.
+                    # 2. Filtro de Magnitud (Mínimo 2.0 para evitar micro-sismos constantes)
                     if mag is not None and mag >= 2.0:
-                        # Hora local México (UTC -6)
-                        fecha_mex = datetime.fromtimestamp(props['time'] / 1000.0) - timedelta(hours=6)
-                        hora_txt = fecha_mex.strftime('%d/%m/%Y %H:%M:%S')
+                        # Hora local (UTC -6)
+                        fecha_local = datetime.fromtimestamp(props['time'] / 1000.0) - timedelta(hours=6)
+                        hora_txt = fecha_local.strftime('%d/%m/%Y %H:%M:%S')
                         
-                        mensaje = (f"⚠️ **SISMO DETECTADO (USGS)**\n\n"
+                        mensaje = (f"⚠️ **SISMO DETECTADO (REGIONAL)**\n\n"
                                    f"📈 **Magnitud:** {mag}\n"
-                                   f"🕒 **Hora local:** {hora_txt}\n"
+                                   f"🕒 **Hora local (UTC-6):** {hora_txt}\n"
                                    f"📍 **Lugar:** {props['place']}\n"
                                    f"🌐 [Ver mapa y detalles]({props['url']})")
                         
                         enviar_telegram(mensaje)
-                        notificados.add(s_id) # Marcar como enviado exitosamente
+                        notificados.add(s_id) 
                         
         except Exception as e:
             print(f"Error en hilo de sismos: {e}")
             
-        time.sleep(30)
+        time.sleep(30) # Revisión cada 30 segundos
 
 # --- 2. MONITOREO DE HURACANES (NHC) ---
 def monitorear_huracanes():
@@ -93,8 +93,7 @@ def monitorear_huracanes():
                             link = item.find('link').text
                             enviar_telegram(f"🌀 **ALERTA CICLÓNICA (NHC)**\n\n📢 {title}\n🌐 [Ver detalles]({link})")
                             vistos_h.add(title)
-        except Exception as e:
-            print(f"Error en huracanes: {e}")
+        except: pass
         time.sleep(1800)
 
 # --- 3. MONITOREO VOLCÁNICO (CENAPRED) ---
@@ -112,20 +111,19 @@ def monitorear_volcanes():
                         link = item.find('link').text
                         enviar_telegram(f"🌋 **ACTIVIDAD VOLCÁNICA (CENAPRED)**\n\n📢 {title}\n🌐 [Ver reporte]({link})")
                         vistos_v.add(title)
-        except Exception as e:
-            print(f"Error en volcanes: {e}")
+        except: pass
         time.sleep(3600)
 
 @app.route('/')
 def home():
-    return "✅ Centro de Monitoreo Multiamenaza Activo (Sismos, Huracanes, Volcanes)"
+    return "✅ Centro de Monitoreo Multiamenaza (MX-GT) Activo"
 
 if __name__ == "__main__":
-    # Iniciar hilos de monitoreo
+    # Iniciar procesos en hilos separados
     threading.Thread(target=monitorear_sismos, daemon=True).start()
     threading.Thread(target=monitorear_huracanes, daemon=True).start()
     threading.Thread(target=monitorear_volcanes, daemon=True).start()
     
-    # Configuración del puerto para despliegue (Render/Heroku)
+    # Puerto dinámico para despliegue
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
