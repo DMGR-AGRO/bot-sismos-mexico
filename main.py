@@ -58,7 +58,7 @@ def monitorear_sismos():
                     mag = props.get('mag')
                     
                     # 2. Filtro de Magnitud (Mínimo 2.0 para evitar micro-sismos constantes)
-                    if mag is not None and mag >= 2.0:
+                    if mag is not None and mag >= 4.0:
                         # Hora local (UTC -6)
                         fecha_local = datetime.fromtimestamp(props['time'] / 1000.0) - timedelta(hours=6)
                         hora_txt = fecha_local.strftime('%d/%m/%Y %H:%M:%S')
