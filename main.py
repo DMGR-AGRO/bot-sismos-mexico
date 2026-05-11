@@ -14,9 +14,9 @@ CHAT_ID = -1003994301891
 
 # Bounding Box Regional (México + Guatemala)
 REGION_BOUNDS = {
-    "lat_min": 13.0,  # Bajado para cubrir todo Guatemala
-    "lat_max": 33.0,  # Ajuste ligero al norte
-    "lon_min": -118.5, 
+    "lat_min": 12.0,  # Bajado para cubrir todo Guatemala
+    "lat_max": 35.0,  # Ajuste ligero al norte
+    "lon_min": -118, 
     "lon_max": -87.0  # Expandido al este para cubrir la frontera de Guatemala
 }
 
