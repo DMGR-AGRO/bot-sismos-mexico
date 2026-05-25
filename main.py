@@ -178,10 +178,12 @@ def monitorear_huracanes():
         time.sleep(600)  # Consulta cada 10 minutos (varias veces al día)
 
 # --- 3. MONITOREO VOLCÁNICO (WEB SCRAPING DIRECTO A CENAPRED) ---
+# --- 3. MONITOREO VOLCÁNICO (WEB SCRAPING OPTIMIZADO PARA LA MAQUETACIÓN ACTUAL) ---
 def monitorear_volcanes():
     global vistos_volcanes
+    # Apuntamos a la raíz para asegurar capturar la estructura principal
     url_principal = "https://www.gob.mx/cenapred"
-    print("Iniciando monitoreo volcánico mediante scraping directo en la web de CENAPRED...")
+    print("Iniciando monitoreo volcánico mediante scraping adaptativo...")
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -194,36 +196,57 @@ def monitorear_volcanes():
             if res.status_code == 200:
                 html_content = res.text
                 
-                # Expresión regular para buscar enlaces a artículos sobre el Popocatépetl
-                patron = r'<a href="(/cenapred/articulos/[^"]+)"[^>]*>(.*?)</a>'
-                enlaces_encontrados = re.findall(patron, html_content)
+                # Buscaremos bloques de artículos. Gob.mx suele envolver estas tarjetas en contenedores.
+                # Esta nueva expresión regular busca CUALQUIER link que apunte a "articulos" 
+                # (soportando opcionalmente si lleva '/es/', '/en/', etc.)
+                patron_links = r'href="([^"]*cenapred/[^"]*articulos/[^"]+)"'
+                enlaces_articulos = re.findall(patron_links, html_content)
                 
-                for link_relativo, texto in enlaces_encontrados:
-                    texto_limpio = re.sub(r'<[^>]+>', '', texto).strip()
+                for link in enlaces_articulos:
+                    # Asegurar que el link sea una URL absoluta completa
+                    link_completo = link if link.startswith("http") else f"https://www.gob.mx{link}"
                     
-                    if "popocatépetl" in texto_limpio.lower() or "popocatepetl" in texto_limpio.lower():
-                        link_completo = f"https://www.gob.mx{link_relativo}"
+                    # Para extraer el título de la tarjeta de forma segura, podemos buscar el texto 
+                    # que está un poco antes o después de ese link en el HTML. 
+                    # Pero para asegurar la alerta inmediata, usaremos una validación infalible:
+                    # Si el link completo o el contexto cercano contiene "popocatepetl", es nuestra meta.
+                    
+                    # Vamos a aislar un "bloque" de texto alrededor del link para buscar palabras clave
+                    posicion = html_content.find(link)
+                    bloque_contexto = html_content[max(0, posicion-500):min(len(html_content), posicion+500)].lower()
+                    
+                    if "popocatépetl" in bloque_contexto or "popocatepetl" in bloque_contexto:
                         
-                        # Se registra por URL única para alertar solo cuando cambie el reporte diario
                         if link_completo not in vistos_volcanes:
-                            titulo_alerta = texto_limpio if len(texto_limpio) > 10 else "Reporte Diario de la Actividad del Popocatépetl"
+                            # Intentamos extraer una fecha o título dinámico del bloque si es posible, 
+                            # si no, armamos el título limpio con la fecha de hoy.
+                            hoy_str = datetime.now().strftime('%d/%m/%Y')
+                            titulo_alerta = f"Monitoreo del volcán Popocatépetl - {hoy_str}"
                             
+                            # Intentar buscar un h2 o h3 cercano en el bloque para heredar el título real
+                            titulos_encontrados = re.findall(r'<h[23][^>]*>(.*?)</h[23]>', html_content[max(0, posicion-600):posicion])
+                            if titulos_encontrados:
+                                titulo_alerta = re.sub(r'<[^>]+>', '', titulos_encontrados[-1]).strip()
+
                             mensaje = (
                                 f"🌋 **ACTIVIDAD VOLCÁNICA (CENAPRED)**\n\n"
-                                f"📢 **Actualización encontrada:** {titulo_alerta}\n\n"
+                                f"📢 **Reporte Actualizado:** {titulo_alerta}\n\n"
                                 f"🌐 [Leer reporte completo en la web]({link_completo})"
                             )
                             
                             enviar_telegram(mensaje)
                             vistos_volcanes.add(link_completo)
-                            break 
+                            print(f"Alerta enviada con éxito para el link: {link_completo}")
+                            break # Detener para quedarse solo con el más reciente del tope
+                else:
+                    print("No se detectaron tarjetas activas del Popocatépetl en esta iteración.")
             else:
-                print(f"No se pudo acceder a la web de CENAPRED. Código: {res.status_code}")
+                print(f"CENAPRED respondió con código de error: {res.status_code}")
                 
         except Exception as e:
-            print(f"Error en scraping de volcanes: {e}")
+            print(f"Error crítico en scraping adaptativo de volcanes: {e}")
             
-        time.sleep(3600)  # Revisa de forma automática cada hora (24 veces al día)
+        time.sleep(3600) # Sigue revisando cada hora de forma automática
 
 @app.route('/')
 def home():
