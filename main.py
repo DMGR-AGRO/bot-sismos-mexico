@@ -101,7 +101,7 @@ def monitorear_huracanes():
     
     while True:
         try:
-            # Tus dos URLs originales e intactas para el Atlántico y el Pacífico Este
+            # URLs originales intactas y corregidas con el subdominio nhc
             urls = ["https://www.nhc.noaa.gov/index-at.xml", "https://www.nhc.noaa.gov/index-ep.xml"]
             
             for url in urls:
@@ -115,7 +115,6 @@ def monitorear_huracanes():
                 for item in root.findall('.//item'):
                     title = item.find('title').text
                     
-                    # Filtros de control: Ignorar periodos de inactividad o reportes rutinarios sin peligro
                     if "no tropical cyclones" in title.lower():
                         continue
                     
@@ -126,7 +125,7 @@ def monitorear_huracanes():
                     # Extraer fecha/hora del boletín específico
                     pub_date = item.find('pubDate').text if item.find('pubDate') is not None else "No especificada"
                     
-                    # Firma única (Título + Hora de emisión) para capturar actualizaciones horarias del mismo fenómeno
+                    # Firma única (Título + Hora de emisión) para capturar actualizaciones
                     firma_alerta = f"{title}_{pub_date}"
                     
                     if firma_alerta not in vistos_huracanes:
@@ -154,7 +153,6 @@ def monitorear_huracanes():
                         if presion:
                             detalles_tecnicos += f"📉 **Presión Mínima:** {presion}\n"
 
-                        # Asignación de semáforo de emojis según el boletín
                         emoji = "🌀"
                         if "Hurricane" in title or "Huracán" in title: emoji = "🔴 **[ACTUALIZACIÓN DE HURACÁN]**"
                         elif "Storm" in title: emoji = "⛈️ **[ACTUALIZACIÓN TORMENTA]**"
@@ -177,16 +175,15 @@ def monitorear_huracanes():
             
         time.sleep(600)  # Consulta cada 10 minutos (varias veces al día)
 
-# --- 3. MONITOREO VOLCÁNICO (WEB SCRAPING DIRECTO A CENAPRED) ---
-# --- 3. MONITOREO VOLCÁNICO (WEB SCRAPING OPTIMIZADO PARA LA MAQUETACIÓN ACTUAL) ---
+# --- 3. MONITOREO VOLCÁNICO (RASTREO PLANO DE ENLACES DE CENAPRED) ---
 def monitorear_volcanes():
     global vistos_volcanes
-    # Apuntamos a la raíz para asegurar capturar la estructura principal
     url_principal = "https://www.gob.mx/cenapred"
-    print("Iniciando monitoreo volcánico mediante scraping adaptativo...")
+    print("Iniciando monitoreo volcánico mediante rastreo plano de URLs...")
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "es-ES,es;q=0.9"
     }
     
     while True:
@@ -196,68 +193,62 @@ def monitorear_volcanes():
             if res.status_code == 200:
                 html_content = res.text
                 
-                # Buscaremos bloques de artículos. Gob.mx suele envolver estas tarjetas en contenedores.
-                # Esta nueva expresión regular busca CUALQUIER link que apunte a "articulos" 
-                # (soportando opcionalmente si lleva '/es/', '/en/', etc.)
-                patron_links = r'href="([^"]*cenapred/[^"]*articulos/[^"]+)"'
-                enlaces_articulos = re.findall(patron_links, html_content)
+                # Buscamos CUALQUIER etiqueta href que apunte a un artículo dentro de cenapred en el HTML estático
+                enlaces_globales = re.findall(r'href="([^"]*cenapred[^"]*articulos/[^"]+)"', html_content)
                 
-                for link in enlaces_articulos:
-                    # Asegurar que el link sea una URL absoluta completa
+                # Eliminamos duplicados manteniendo el orden estricto de aparición (de arriba a abajo)
+                enlaces_unicos = list(dict.fromkeys(enlaces_globales))
+                
+                encontrado = False
+                for link in enlaces_unicos:
                     link_completo = link if link.startswith("http") else f"https://www.gob.mx{link}"
                     
-                    # Para extraer el título de la tarjeta de forma segura, podemos buscar el texto 
-                    # que está un poco antes o después de ese link en el HTML. 
-                    # Pero para asegurar la alerta inmediata, usaremos una validación infalible:
-                    # Si el link completo o el contexto cercano contiene "popocatepetl", es nuestra meta.
-                    
-                    # Vamos a aislar un "bloque" de texto alrededor del link para buscar palabras clave
-                    posicion = html_content.find(link)
-                    bloque_contexto = html_content[max(0, posicion-500):min(len(html_content), posicion+500)].lower()
-                    
-                    if "popocatépetl" in bloque_contexto or "popocatepetl" in bloque_contexto:
+                    # Verificamos la palabra clave directo en la URL del enlace para esquivar el renderizado dinámico
+                    if "popocatepetl" in link_completo.lower() or "popocatepetl" in link_completo.replace("é", "e").lower():
                         
                         if link_completo not in vistos_volcanes:
-                            # Intentamos extraer una fecha o título dinámico del bloque si es posible, 
-                            # si no, armamos el título limpio con la fecha de hoy.
                             hoy_str = datetime.now().strftime('%d/%m/%Y')
-                            titulo_alerta = f"Monitoreo del volcán Popocatépetl - {hoy_str}"
+                            titulo_alerta = f"Reporte Diario de la Actividad del Popocatépetl - {hoy_str}"
                             
-                            # Intentar buscar un h2 o h3 cercano en el bloque para heredar el título real
-                            titulos_encontrados = re.findall(r'<h[23][^>]*>(.*?)</h[23]>', html_content[max(0, posicion-600):posicion])
-                            if titulos_encontrados:
-                                titulo_alerta = re.sub(r'<[^>]+>', '', titulos_encontrados[-1]).strip()
+                            # Intentamos embellecer el título limpiando el slug del propio enlace
+                            match_slug = re.search(r'articulos/([^?#]+)', link_completo)
+                            if match_slug:
+                                slug_texto = match_slug.group(1).replace("-", " ").strip("/")
+                                if "popocatepetl" in slug_texto:
+                                    titulo_alerta = slug_texto.capitalize()
 
                             mensaje = (
                                 f"🌋 **ACTIVIDAD VOLCÁNICA (CENAPRED)**\n\n"
-                                f"📢 **Reporte Actualizado:** {titulo_alerta}\n\n"
+                                f"📢 **Reporte Detectado:** {titulo_alerta}\n\n"
                                 f"🌐 [Leer reporte completo en la web]({link_completo})"
                             )
                             
                             enviar_telegram(mensaje)
                             vistos_volcanes.add(link_completo)
-                            print(f"Alerta enviada con éxito para el link: {link_completo}")
-                            break # Detener para quedarse solo con el más reciente del tope
-                else:
-                    print("No se detectaron tarjetas activas del Popocatépetl en esta iteración.")
+                            print(f"Alerta volcánica enviada exitosamente: {link_completo}")
+                            encontrado = True
+                            break  # Frena el ciclo para quedarse únicamente con el reporte del tope (el más nuevo)
+                
+                if not encontrado:
+                    print("No se encontraron enlaces con la palabra 'popocatepetl' en el HTML base.")
             else:
-                print(f"CENAPRED respondió con código de error: {res.status_code}")
+                print(f"Error al conectar con CENAPRED: {res.status_code}")
                 
         except Exception as e:
-            print(f"Error crítico en scraping adaptativo de volcanes: {e}")
+            print(f"Error en rastreo plano de volcanes: {e}")
             
-        time.sleep(3600) # Sigue revisando cada hora de forma automática
+        time.sleep(3600)  # Revisa de forma automática cada hora (24 veces al día)
 
 @app.route('/')
 def home():
-    return " Centro de Monitoreo Multiamenaza (MX-GT) Activo y Corriendo"
+    return "✅ Centro de Monitoreo Multiamenaza (MX-GT) Activo y Corriendo"
 
 if __name__ == "__main__":
-    # Inicialización de hilos asíncronos en segundo plano
+    # Inicialización de los demonios de monitoreo asíncronos en segundo plano
     threading.Thread(target=monitorear_sismos, daemon=True).start()
     threading.Thread(target=monitorear_huracanes, daemon=True).start()
     threading.Thread(target=monitorear_volcanes, daemon=True).start()
     
-    # Puerto dinámico adaptable para servidores en la nube
+    # Puerto dinámico adaptable para el despliegue en Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
