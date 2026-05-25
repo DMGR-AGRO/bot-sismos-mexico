@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import threading
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from flask import Flask
@@ -10,7 +11,7 @@ app = Flask(__name__)
 
 # --- CONFIGURACIÓN ---
 TOKEN = "8107696402:AAEwS9w1AcFYY8jY-vrENEtcvkEcAjuq-QI"
-CHAT_ID = -1003994301891  # Limpiado espacio invisible
+CHAT_ID = -1003994301891  # Identificador de Telegram sin espacios ocultos
 
 # Bounding Box Regional (México + Guatemala)
 REGION_BOUNDS = {
@@ -20,8 +21,16 @@ REGION_BOUNDS = {
     "lon_max": -87.0  
 }
 
-# Set global para que no se borre fácilmente si la función se re-ejecuta internamente
-notificados = set()
+# Registros de Namespaces obligatorios para el XML de la NOAA / NHC
+NAMESPACES = {
+    'georss': 'http://www.georss.org/georss',
+    'nhc': 'https://www.nhc.noaa.gov'
+}
+
+# --- MEMORIA GLOBAL DE NOTIFICACIONES ---
+notificados_sismos = set()
+vistos_huracanes = set()
+vistos_volcanes = set()
 
 def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -35,12 +44,12 @@ def enviar_telegram(mensaje):
 
 # --- 1. MONITOREO DE SISMOS (USGS) ---
 def monitorear_sismos():
-    global notificados
+    global notificados_sismos
     print("Iniciando monitoreo sísmico regional (MX-GT)...")
     
     while True:
         try:
-            # CAMBIO: Usamos el feed de la ÚLTIMA HORA para mayor velocidad y menor carga
+            # Feed de la ÚLTIMA HORA para optimizar consumo y procesar eventos inmediatos
             url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
             response = requests.get(url, timeout=10)
             
@@ -50,90 +59,182 @@ def monitorear_sismos():
                 for sismo in data.get('features', []):
                     s_id = sismo['id']
                     
-                    if s_id in notificados:
+                    if s_id in notificados_sismos:
                         continue
 
                     coords = sismo['geometry']['coordinates']
                     lon, lat = coords[0], coords[1]
                     
-                    # 1. Filtro Geográfico Regional
+                    # Filtro Geográfico Regional
                     if (REGION_BOUNDS["lat_min"] <= lat <= REGION_BOUNDS["lat_max"] and 
                         REGION_BOUNDS["lon_min"] <= lon <= REGION_BOUNDS["lon_max"]):
                         
                         props = sismo['properties']
                         mag = props.get('mag')
                         
-                        # 2. Filtro de Magnitud (Mayor o igual a 4.0)
+                        # Filtro de Magnitud (Mínimo 4.0)
                         if mag is not None and mag >= 4.0:
-                            # Hora local (UTC -6)
+                            # Conversión a Hora local (UTC -6)
                             fecha_local = datetime.fromtimestamp(props['time'] / 1000.0) - timedelta(hours=6)
                             hora_txt = fecha_local.strftime('%d/%m/%Y %H:%M:%S')
                             
-                            mensaje = (f"⚠️ **SISMO DETECTADO**\n\n"
+                            mensaje = (f"⚠️ **SISMO DETECTADO (REGIONAL)**\n\n"
                                        f"📈 **Magnitud:** {mag}\n"
                                        f"🕒 **Hora local (UTC-6):** {hora_txt}\n"
                                        f"📍 **Lugar:** {props['place']}\n"
                                        f"🌐 [Ver mapa y detalles]({props['url']})")
                             
                             enviar_telegram(mensaje)
-                            notificados.add(s_id) 
+                            notificados_sismos.add(s_id) 
             else:
                 print(f"USGS respondió con código de error: {response.status_code}")
                                 
         except Exception as e:
             print(f"Error en hilo de sismos: {e}")
             
-        time.sleep(30) # Revisión cada 30 segundos
+        time.sleep(30)  # Revisión estructural cada 30 segundos
 
-# --- 2. MONITOREO DE HURACANES (NHC) ---
+# --- 2. MONITOREO DE HURACANES (NHC / NOAA) ---
 def monitorear_huracanes():
-    vistos_h = set()
+    global vistos_huracanes
+    print("Iniciando monitoreo de ciclones con rastreo de actualizaciones (NHC)...")
+    
     while True:
         try:
+            # Tus dos URLs originales e intactas para el Atlántico y el Pacífico Este
             urls = ["https://www.nhc.noaa.gov/index-at.xml", "https://www.nhc.noaa.gov/index-ep.xml"]
+            
             for url in urls:
                 res = requests.get(url, timeout=10)
+                if res.status_code != 200:
+                    continue
+                    
                 root = ET.fromstring(res.content)
+                cuenca = "ATLÁNTICO / CARIBE" if "index-at" in url else "PACÍFICO ESTE"
+                
                 for item in root.findall('.//item'):
                     title = item.find('title').text
-                    if any(x in title for x in ["Tropical", "Hurricane", "Storm", "Depression"]):
-                        if title not in vistos_h:
-                            link = item.find('link').text
-                            enviar_telegram(f"🌀 **ALERTA CICLÓNICA (NHC)**\n\n📢 {title}\n🌐 [Ver detalles]({link})")
-                            vistos_h.add(title)
+                    
+                    # Filtros de control: Ignorar periodos de inactividad o reportes rutinarios sin peligro
+                    if "no tropical cyclones" in title.lower():
+                        continue
+                    
+                    desc_text = item.find('description').text or ""
+                    if "formation is not expected" in desc_text.lower() and "Tropical Weather Outlook" in title:
+                        continue
+                    
+                    # Extraer fecha/hora del boletín específico
+                    pub_date = item.find('pubDate').text if item.find('pubDate') is not None else "No especificada"
+                    
+                    # Firma única (Título + Hora de emisión) para capturar actualizaciones horarias del mismo fenómeno
+                    firma_alerta = f"{title}_{pub_date}"
+                    
+                    if firma_alerta not in vistos_huracanes:
+                        link = item.find('link').text
+                        
+                        # Extracción de datos geoespaciales y meteorológicos del XML de la NOAA
+                        punto_geo = item.find('georss:point', NAMESPACES)
+                        coordenadas = punto_geo.text if punto_geo is not None else "No disponible"
+                        
+                        viento_elem = item.find('nhc:wind', NAMESPACES)
+                        presion_elem = item.find('nhc:pressure', NAMESPACES)
+                        
+                        viento = viento_elem.text if viento_elem is not None else None
+                        presion = presion_elem.text if presion_elem is not None else None
+                        
+                        detalles_tecnicos = ""
+                        if coordenadas != "No disponible":
+                            detalles_tecnicos += f"📍 **Ubicación (Lat, Lon):** {coordenadas}\n"
+                        if viento:
+                            try:
+                                v_kmh = round(float(viento.split()[0]) * 1.852)
+                                detalles_tecnicos += f"💨 **Vientos máximos:** {viento} (~{v_kmh} km/h)\n"
+                            except:
+                                detalles_tecnicos += f"💨 **Vientos máximos:** {viento}\n"
+                        if presion:
+                            detalles_tecnicos += f"📉 **Presión Mínima:** {presion}\n"
+
+                        # Asignación de semáforo de emojis según el boletín
+                        emoji = "🌀"
+                        if "Hurricane" in title or "Huracán" in title: emoji = "🔴 **[ACTUALIZACIÓN DE HURACÁN]**"
+                        elif "Storm" in title: emoji = "⛈️ **[ACTUALIZACIÓN TORMENTA]**"
+                        elif "Depression" in title: emoji = "🌧️ **[ACTUALIZACIÓN DEPRESIÓN]**"
+                        elif "Disturbance" in title: emoji = "🟡 **[MONITOREO DE INESTABILIDAD]**"
+
+                        mensaje = (
+                            f"{emoji} **ALERTA CICLÓNICA ({cuenca})**\n\n"
+                            f"📢 **Fenómeno:** {title}\n"
+                            f"{detalles_tecnicos}"
+                            f"📅 **Emisión del boletín:** {pub_date}\n\n"
+                            f"🌐 [Ver trayectoria y modelos en vivo]({link})"
+                        )
+                        
+                        enviar_telegram(mensaje)
+                        vistos_huracanes.add(firma_alerta)
+                        
         except Exception as e:
             print(f"Error en hilo de huracanes: {e}")
-        time.sleep(1800)
+            
+        time.sleep(600)  # Consulta cada 10 minutos (varias veces al día)
 
-# --- 3. MONITOREO VOLCÁNICO (CENAPRED) ---
+# --- 3. MONITOREO VOLCÁNICO (WEB SCRAPING DIRECTO A CENAPRED) ---
 def monitorear_volcanes():
-    vistos_v = set()
-    url_cenapred = "https://www.gob.mx/cenapred/archivo/articulos.rss"
+    global vistos_volcanes
+    url_principal = "https://www.gob.mx/cenapred"
+    print("Iniciando monitoreo volcánico mediante scraping directo en la web de CENAPRED...")
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
     while True:
         try:
-            res = requests.get(url_cenapred, timeout=10)
-            root = ET.fromstring(res.content)
-            for item in root.findall('.//item'):
-                title = item.find('title').text
-                if "Popocatépetl" in title:
-                    if title not in vistos_v:
-                        link = item.find('link').text
-                        enviar_telegram(f"🌋 **ACTIVIDAD VOLCÁNICA (CENAPRED)**\n\n📢 {title}\n🌐 [Ver reporte]({link})")
-                        vistos_v.add(title)
+            res = requests.get(url_principal, headers=headers, timeout=15)
+            
+            if res.status_code == 200:
+                html_content = res.text
+                
+                # Expresión regular para buscar enlaces a artículos sobre el Popocatépetl
+                patron = r'<a href="(/cenapred/articulos/[^"]+)"[^>]*>(.*?)</a>'
+                enlaces_encontrados = re.findall(patron, html_content)
+                
+                for link_relativo, texto in enlaces_encontrados:
+                    texto_limpio = re.sub(r'<[^>]+>', '', texto).strip()
+                    
+                    if "popocatépetl" in texto_limpio.lower() or "popocatepetl" in texto_limpio.lower():
+                        link_completo = f"https://www.gob.mx{link_relativo}"
+                        
+                        # Se registra por URL única para alertar solo cuando cambie el reporte diario
+                        if link_completo not in vistos_volcanes:
+                            titulo_alerta = texto_limpio if len(texto_limpio) > 10 else "Reporte Diario de la Actividad del Popocatépetl"
+                            
+                            mensaje = (
+                                f"🌋 **ACTIVIDAD VOLCÁNICA (CENAPRED)**\n\n"
+                                f"📢 **Actualización encontrada:** {titulo_alerta}\n\n"
+                                f"🌐 [Leer reporte completo en la web]({link_completo})"
+                            )
+                            
+                            enviar_telegram(mensaje)
+                            vistos_volcanes.add(link_completo)
+                            break 
+            else:
+                print(f"No se pudo acceder a la web de CENAPRED. Código: {res.status_code}")
+                
         except Exception as e:
-            print(f"Error en hilo de volcanes: {e}")
-        time.sleep(3600)
+            print(f"Error en scraping de volcanes: {e}")
+            
+        time.sleep(3600)  # Revisa de forma automática cada hora (24 veces al día)
 
 @app.route('/')
 def home():
-    return "✅ Centro de Monitoreo Multiamenaza (MX-GT) Activo"
+    return " Centro de Monitoreo Multiamenaza (MX-GT) Activo y Corriendo"
 
 if __name__ == "__main__":
-    # Iniciar procesos en hilos separados
+    # Inicialización de hilos asíncronos en segundo plano
     threading.Thread(target=monitorear_sismos, daemon=True).start()
     threading.Thread(target=monitorear_huracanes, daemon=True).start()
     threading.Thread(target=monitorear_volcanes, daemon=True).start()
     
-    # Puerto dinámico para despliegue
+    # Puerto dinámico adaptable para servidores en la nube
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
